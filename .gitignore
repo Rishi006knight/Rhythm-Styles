@@ -9,6 +9,11 @@ backend/__pycache__/
 *.pyc
 *.pyo
 
+# Environment variables & secrets
+.env
+.env.*
+*.env
+
 # IDE & OS
 .vscode/
 .idea/
