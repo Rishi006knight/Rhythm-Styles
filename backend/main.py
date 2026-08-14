@@ -20,21 +20,26 @@ app = FastAPI(title="Rhythm-Styles API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"]
 )
 
 @app.get("/")
 def read_root():
     return {"message": "Music Style Transformer API is running"}
 
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
+@app.post("/upload")
 @app.post("/upload/")
 async def upload_song(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    # Basic upload structure
-    # TODO: Save file to disk/storage
     return {"filename": file.filename, "status": "Uploaded"}
 
+@app.post("/transform")
 @app.post("/transform/")
 async def transform_song(
     file: UploadFile = File(...),
