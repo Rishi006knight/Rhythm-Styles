@@ -609,6 +609,11 @@
 }
 
 @media (max-width: 768px) {
+  /* iOS Safari / Android: disable fixed bg attachment to prevent rendering bugs */
+  html, body {
+    background-attachment: scroll;
+  }
+
   .app-container {
     padding: 24px 16px 60px;
   }
@@ -628,11 +633,30 @@
 
   .glass-card {
     border-radius: 16px;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
   }
 
   .intensity-pills-row {
     flex-direction: row;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-title {
+    font-size: 1.6rem;
+  }
+
+  .genre-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .genre-tile {
+    padding: 16px 10px;
+  }
+
+  .genre-emoji {
+    font-size: 26px;
   }
 }
