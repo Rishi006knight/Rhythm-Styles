@@ -21,6 +21,7 @@ function App() {
   // Global Enhancements
   const [surround3D, setSurround3D] = useState(false);
   const [bassBoost, setBassBoost] = useState(25);
+  const [volume, setVolume] = useState(100);
 
   const fileInputRef = useRef(null);
 
@@ -263,8 +264,11 @@ function App() {
       lastNode = shimmerFilter;
     }
 
-    // Connect final node to destination and trigger source start
-    lastNode.connect(offlineCtx.destination);
+    // Master Output Gain / Volume Control
+    const masterGain = offlineCtx.createGain();
+    masterGain.gain.value = Math.max(volume / 100, 0);
+    lastNode.connect(masterGain);
+    masterGain.connect(offlineCtx.destination);
     source.start(0);
 
     const renderedBuffer = await offlineCtx.startRendering();
@@ -394,6 +398,7 @@ function App() {
     formData.append('effects', JSON.stringify(effects));
     formData.append('surround_3d', surround3D);
     formData.append('bass_boost', bassBoost);
+    formData.append('volume', volume);
 
     // 1. Attempt Server-Side Transformation (with cold-start status)
     let serverSucceeded = false;
@@ -677,6 +682,24 @@ function App() {
                 max="100"
                 value={bassBoost}
                 onChange={(e) => setBassBoost(Number(e.target.value))}
+                className="neon-range-slider"
+              />
+            </div>
+
+            <div className="neon-slider-wrapper">
+              <div className="neon-slider-header">
+                <span>Master Output Volume</span>
+                <span className="neon-slider-val">
+                  {volume === 0 ? 'Mute (0%)' : volume === 100 ? '100% (Normal)' : `${volume}%`}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="200"
+                step="5"
+                value={volume}
+                onChange={(e) => setVolume(Number(e.target.value))}
                 className="neon-range-slider"
               />
             </div>

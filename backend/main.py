@@ -48,6 +48,7 @@ async def transform_song(
     effects: str = Form(default="{}"),
     surround_3d: bool = Form(default=False),
     bass_boost: int = Form(default=0),
+    volume: int = Form(default=100),
     db: Session = Depends(get_db)
 ):
     try:
@@ -57,7 +58,7 @@ async def transform_song(
             raise HTTPException(status_code=400, detail="Empty audio file uploaded")
         
         # Process the audio with DSP
-        processed_bytes = dsp.process_audio(file_bytes, file.filename or "audio.wav", genre, intensity, effects, surround_3d, bass_boost)
+        processed_bytes = dsp.process_audio(file_bytes, file.filename or "audio.wav", genre, intensity, effects, surround_3d, bass_boost, volume)
         
         # Sanitize output filename to ASCII
         raw_name = (file.filename or "audio").rsplit('.', 1)[0]

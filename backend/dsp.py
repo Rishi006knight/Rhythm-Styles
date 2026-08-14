@@ -117,11 +117,16 @@ def _effect_level(effects, key, intensity):
 # MAIN PROCESSING ENTRYPOINT
 # ─────────────────────────────────────────────
 def process_audio(file_bytes: bytes, filename: str, genre: str, intensity: str,
-                  effects_json: str, surround_3d: bool = False, bass_boost: int = 0) -> bytes:
+                  effects_json: str, surround_3d: bool = False, bass_boost: int = 0, volume: int = 100) -> bytes:
     try:
         bass_boost = int(bass_boost)
     except (ValueError, TypeError):
         bass_boost = 0
+
+    try:
+        volume = int(volume)
+    except (ValueError, TypeError):
+        volume = 100
 
     if isinstance(surround_3d, str):
         surround_3d = surround_3d.lower() in ('true', '1', 'yes')
@@ -229,6 +234,10 @@ def process_audio(file_bytes: bytes, filename: str, genre: str, intensity: str,
 
         if surround_3d:
             y = apply_3d_surround(y, sr)
+
+        # Master Output Volume Scaling
+        vol_factor = max(volume / 100.0, 0.0)
+        y = np.clip(y * vol_factor, -1.0, 1.0)
 
         sf.write(out_path, y, sr, format='WAV')
 
