@@ -221,7 +221,7 @@ function App() {
       lastNode = highFilter;
 
     } else if (selectedGenre === 'Reggae') {
-      // Dub Delay Feedback Loop
+      // Dub Delay Feedback Loop + Deep Bass
       const dubDelay = offlineCtx.createDelay(1.0);
       dubDelay.delayTime.value = 0.32;
       const dubFeedback = offlineCtx.createGain();
@@ -262,6 +262,10 @@ function App() {
       lastNode.connect(shimmerFilter);
       lastNode = shimmerFilter;
     }
+
+    // Connect final node to destination and trigger source start
+    lastNode.connect(offlineCtx.destination);
+    source.start(0);
 
     const renderedBuffer = await offlineCtx.startRendering();
 
