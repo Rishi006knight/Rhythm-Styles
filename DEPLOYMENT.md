@@ -9,6 +9,7 @@ This guide walks you through deploying **Rhythm-Styles** using **Render** for th
 - **Backend**: Python 3.11 + FastAPI + Audio DSP running on **Render Web Service**.
 - **Database**: PostgreSQL (Neon.tech or Render PostgreSQL).
 - **Frontend**: React + Vite SPA hosted on **Vercel**.
+- **Fallback**: If backend unreachable, app auto-switches to Client-Side Web Audio DSP Engine.
 
 ---
 
@@ -49,19 +50,34 @@ This guide walks you through deploying **Rhythm-Styles** using **Render** for th
    - Select your GitHub repository: `Rishi006knight/Rhythm-Styles`.
 
 2. **Configure Project Settings**:
+   - **Root Directory**: `frontend` ← Set this to the `frontend` folder
    - **Framework Preset**: `Vite`
-   - **Root Directory**: Select `frontend` (or edit root directory to `frontend`).
    - **Build Command**: `npm run build`
    - **Output Directory**: `dist`
 
-3. **Set Environment Variable**:
-   Add the following environment variable under **Environment Variables**:
+3. **Set Environment Variable** ← THIS IS THE MOST COMMON CAUSE OF "Failed to fetch":
+   Add the following environment variable under **Settings → Environment Variables**:
    - **Key**: `VITE_API_BASE_URL`
-   - **Value**: `https://rhythm-styles-backend.onrender.com` *(Replace with your actual Render backend URL)*
+   - **Value**: `https://rhythm-styles-backend.onrender.com` *(must be HTTPS — never http://)*
 
-4. **Deploy**:
-   - Click **Deploy**.
-   - Vercel will build and deploy your app instantly.
+   > ⚠️ If this variable is missing, the app uses Client-Side Web Audio DSP fallback automatically.
+   > ⚠️ Never set it to `http://` on Vercel — browsers block HTTP from HTTPS pages (Mixed Content).
+
+4. **Redeploy after adding env var**:
+   - Go to **Deployments** → click latest deployment → **Redeploy**.
+
+---
+
+## ⚠️ "Failed to Fetch" — Root Causes & Fixes
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| "No backend URL configured" toast | `VITE_API_BASE_URL` not set in Vercel | Add env var + redeploy |
+| "Mixed Content blocked" toast | Env var is `http://` not `https://` | Fix URL to use HTTPS |
+| "Backend cold-starting" toast | Render free tier sleeps after 15 min | App auto-falls back in 3s via health-check |
+| 500 error from backend | Backend crash / missing deps | Check Render service logs |
+
+The app does a **3-second health ping** to `/health` before each transform. If backend is unreachable, it immediately switches to the **Client-Side Web Audio DSP Engine** — no 50-second hang.
 
 ---
 
@@ -69,4 +85,4 @@ This guide walks you through deploying **Rhythm-Styles** using **Render** for th
 
 - **CORS Errors**: The backend `main.py` already includes `CORSMiddleware` with `allow_origins=["*"]`.
 - **Database Connection**: Neon PostgreSQL URLs (`postgres://` or `postgresql://`) are automatically handled in `database.py`.
-- **Vite SPA Routing**: Handled via `vercel.json` rewrites.
+- **Vite SPA Routing**: Handled via `frontend/vercel.json` rewrites.

@@ -8,6 +8,7 @@ function App() {
   const [file, setFile] = useState(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState(null);
   const [isTransforming, setIsTransforming] = useState(false);
+  const [transformStatus, setTransformStatus] = useState(''); // status sub-label
   const [resultAudioUrl, setResultAudioUrl] = useState(null);
   const [resultFilename, setResultFilename] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
@@ -175,14 +176,69 @@ function App() {
     return new Blob([outBuffer], { type: 'audio/wav' });
   };
 
+  // Fast health-check with configurable timeout (ms)
+  const pingBackend = async (apiBaseUrl, timeoutMs = 3000) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${apiBaseUrl}/health`, { signal: controller.signal });
+      clearTimeout(timer);
+      return res.ok;
+    } catch {
+      clearTimeout(timer);
+      return false;
+    }
+  };
+
   const handleTransform = async () => {
     if (!file || !selectedGenre) return;
     
     setIsTransforming(true);
+    setTransformStatus('');
     setResultAudioUrl(null);
     setErrorMessage(null);
     setUsedFallback(false);
 
+    const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
+    // --- Step 1: Fast health-check (3s) ---
+    // Skipped if no backend URL is configured (pure client-side mode)
+    let backendAvailable = false;
+    if (apiBaseUrl) {
+      setTransformStatus('Checking backend...');
+      backendAvailable = await pingBackend(apiBaseUrl, 3000);
+    }
+
+    if (!backendAvailable) {
+      // Determine reason for better UX messaging
+      const isMixedContent = apiBaseUrl.startsWith('http://') && window.location.protocol === 'https:';
+      const reason = !apiBaseUrl
+        ? 'No backend URL configured'
+        : isMixedContent
+        ? 'Backend URL is HTTP on an HTTPS page (Mixed Content blocked)'
+        : 'Backend is offline or cold-starting (Render free tier)';
+
+      console.warn(`Backend unavailable — ${reason}. Activating Web Audio DSP Fallback.`);
+      setErrorMessage(`⚡ ${reason}. Using Client-Side Web Audio DSP Engine instead.`);
+
+      try {
+        setTransformStatus('Running client-side DSP...');
+        const fallbackBlob = await processAudioWithWebAudio(file);
+        const url = window.URL.createObjectURL(fallbackBlob);
+        setResultAudioUrl(url);
+        setResultFilename(`${selectedGenre.toLowerCase()}_style_${file.name.replace(/\.[^/.]+$/, '')}.wav`);
+        setUsedFallback(true);
+      } catch (fallbackErr) {
+        console.error('Fallback failed:', fallbackErr);
+        setErrorMessage(`Transformation failed: ${fallbackErr.message}`);
+      } finally {
+        setIsTransforming(false);
+        setTransformStatus('');
+      }
+      return;
+    }
+
+    // --- Step 2: Backend is alive — send full transform request ---
     const formData = new FormData();
     formData.append('file', file);
     formData.append('genre', selectedGenre);
@@ -192,7 +248,7 @@ function App() {
     formData.append('bass_boost', bassBoost);
 
     try {
-      const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+      setTransformStatus('Transforming on server...');
       const response = await fetch(`${apiBaseUrl}/transform/`, {
         method: 'POST',
         body: formData,
@@ -215,14 +271,15 @@ function App() {
       setResultFilename(filename);
 
     } catch (error) {
-      console.warn('Backend fetch failed, activating Web Audio DSP Fallback:', error);
-      setErrorMessage(`Backend API not reachable (${error.message}). Switched to Client-Side Web Audio DSP Engine!`);
+      console.warn('Backend transform failed, activating Web Audio DSP Fallback:', error);
+      setErrorMessage(`Backend error: ${error.message}. Switched to Client-Side Web Audio DSP Engine!`);
       
       try {
+        setTransformStatus('Running client-side DSP fallback...');
         const fallbackBlob = await processAudioWithWebAudio(file);
         const url = window.URL.createObjectURL(fallbackBlob);
         setResultAudioUrl(url);
-        setResultFilename(`${selectedGenre.toLowerCase()}_style_${file.name.replace(/\.[^/.]+$/, "")}.wav`);
+        setResultFilename(`${selectedGenre.toLowerCase()}_style_${file.name.replace(/\.[^/.]+$/, '')}.wav`);
         setUsedFallback(true);
       } catch (fallbackErr) {
         console.error('Fallback failed:', fallbackErr);
@@ -230,6 +287,7 @@ function App() {
       }
     } finally {
       setIsTransforming(false);
+      setTransformStatus('');
     }
   };
 
@@ -468,7 +526,7 @@ function App() {
                       />
                     ))}
                   </div>
-                  <span>TRANSFORMING AUDIO...</span>
+                  <span>{transformStatus || 'TRANSFORMING AUDIO...'}</span>
                 </>
               ) : (
                 <>
