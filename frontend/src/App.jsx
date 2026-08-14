@@ -1,5 +1,7 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import './App.css'
+
+const DEFAULT_BACKEND_URL = 'https://rhythm-styles-backend.onrender.com';
 
 function App() {
   const [selectedGenre, setSelectedGenre] = useState('');
@@ -14,12 +16,54 @@ function App() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
   const [usedFallback, setUsedFallback] = useState(false);
+  const [serverStatus, setServerStatus] = useState('checking'); // 'online' | 'waking' | 'offline'
   
   // Global Enhancements
   const [surround3D, setSurround3D] = useState(false);
   const [bassBoost, setBassBoost] = useState(25);
 
   const fileInputRef = useRef(null);
+
+  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || DEFAULT_BACKEND_URL).replace(/\/$/, '');
+
+  // Auto-wake Render backend immediately on page load
+  useEffect(() => {
+    let isMounted = true;
+    const checkServer = async () => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch(`${apiBaseUrl}/health`, { signal: controller.signal });
+        clearTimeout(timer);
+        if (res.ok && isMounted) {
+          setServerStatus('online');
+          return;
+        }
+      } catch (err) {
+        // May be sleeping
+      }
+
+      if (isMounted) setServerStatus('waking');
+
+      // Retry after 15 seconds if it was sleeping
+      try {
+        const controller2 = new AbortController();
+        const timer2 = setTimeout(() => controller2.abort(), 35000);
+        const res2 = await fetch(`${apiBaseUrl}/health`, { signal: controller2.signal });
+        clearTimeout(timer2);
+        if (res2.ok && isMounted) {
+          setServerStatus('online');
+        } else if (isMounted) {
+          setServerStatus('offline');
+        }
+      } catch {
+        if (isMounted) setServerStatus('offline');
+      }
+    };
+
+    checkServer();
+    return () => { isMounted = false; };
+  }, [apiBaseUrl]);
 
   const genreDetails = {
     'Rock': { emoji: '🎸', fx: ['Distortion', 'Overdrive', 'Reverb', 'Drum Impact'] },
@@ -78,57 +122,169 @@ function App() {
     setEffects(prev => ({ ...prev, [effect]: level }));
   };
 
-  // Client-Side Web Audio API Fallback Processing
+  // Distortion curve generator for WaveShaperNode
+  const makeDistortionCurve = (amount = 20) => {
+    const k = typeof amount === 'number' ? amount : 50;
+    const n_samples = 44100;
+    const curve = new Float32Array(n_samples);
+    const deg = Math.PI / 180;
+    for (let i = 0; i < n_samples; ++i) {
+      const x = (i * 2) / n_samples - 1;
+      curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+    }
+    return curve;
+  };
+
+  // Client-Side Web Audio API Fallback Processing (High-Impact Real DSP)
   const processAudioWithWebAudio = async (audioFile) => {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const arrayBuffer = await audioFile.arrayBuffer();
     const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
+    // Calculate playback speed based on genre
+    let playbackRate = 1.0;
+    if (selectedGenre === 'Synthwave') playbackRate = 0.93; // 80s slow tape
+    else if (selectedGenre === 'Disco') playbackRate = 1.06; // Upbeat dance tempo
+    else if (selectedGenre === 'Pop') playbackRate = 1.03; // Bright pop
+    else if (selectedGenre === 'Jazz') playbackRate = 0.95; // Laid-back swing
+    else if (selectedGenre === '8-bit') playbackRate = 1.05; // Fast arcade
+
+    const outputLength = Math.ceil(audioBuffer.length / playbackRate);
     const offlineCtx = new OfflineAudioContext(
       audioBuffer.numberOfChannels,
-      audioBuffer.length,
+      outputLength,
       audioBuffer.sampleRate
     );
 
     const source = offlineCtx.createBufferSource();
     source.buffer = audioBuffer;
+    source.playbackRate.value = playbackRate;
 
-    // Apply Bass Boost EQ Filter
+    // 1. Bass Boost Low-shelf
     const bassFilter = offlineCtx.createBiquadFilter();
     bassFilter.type = 'lowshelf';
-    bassFilter.frequency.value = 180;
-    bassFilter.gain.value = (bassBoost / 100) * 12; // 0 to +12dB
+    bassFilter.frequency.value = 160;
+    bassFilter.gain.value = (bassBoost / 100) * 16; // 0 to +16dB
 
-    // Apply Genre / Surround Filter adjustments
-    const genreFilter = offlineCtx.createBiquadFilter();
-    if (selectedGenre === '8-bit') {
-      genreFilter.type = 'peaking';
-      genreFilter.frequency.value = 1200;
-      genreFilter.gain.value = 8;
-    } else if (selectedGenre === 'Synthwave' || selectedGenre === 'Pop') {
-      genreFilter.type = 'highshelf';
-      genreFilter.frequency.value = 4000;
-      genreFilter.gain.value = 6;
-    } else if (selectedGenre === 'Rock' || selectedGenre === 'Metal') {
-      genreFilter.type = 'peaking';
-      genreFilter.frequency.value = 2500;
-      genreFilter.gain.value = 7;
+    // 2. Genre-Specific Chain
+    let lastNode = source;
+    lastNode.connect(bassFilter);
+    lastNode = bassFilter;
+
+    if (selectedGenre === 'Rock' || selectedGenre === 'Metal') {
+      // WaveShaper Overdrive / Distortion
+      const distortion = offlineCtx.createWaveShaper();
+      distortion.curve = makeDistortionCurve(selectedGenre === 'Metal' ? 120 : 50);
+      distortion.oversample = '4x';
+      
+      const cabFilter = offlineCtx.createBiquadFilter();
+      cabFilter.type = 'lowpass';
+      cabFilter.frequency.value = selectedGenre === 'Metal' ? 4500 : 5500;
+
+      lastNode.connect(distortion);
+      distortion.connect(cabFilter);
+      lastNode = cabFilter;
+
+    } else if (selectedGenre === '8-bit') {
+      // Direct Buffer Bit-Crush & Decimation
+      const bitFilter = offlineCtx.createBiquadFilter();
+      bitFilter.type = 'peaking';
+      bitFilter.frequency.value = 1500;
+      bitFilter.gain.value = 12;
+      lastNode.connect(bitFilter);
+      lastNode = bitFilter;
+
+    } else if (selectedGenre === 'Synthwave') {
+      // Lowpass + Delay + Chorus
+      const lpFilter = offlineCtx.createBiquadFilter();
+      lpFilter.type = 'lowpass';
+      lpFilter.frequency.value = 3200;
+
+      const delay = offlineCtx.createDelay(1.0);
+      delay.delayTime.value = 0.38;
+      const delayGain = offlineCtx.createGain();
+      delayGain.gain.value = 0.35;
+
+      lastNode.connect(lpFilter);
+      lpFilter.connect(delay);
+      delay.connect(delayGain);
+      delayGain.connect(offlineCtx.destination);
+      lastNode = lpFilter;
+
+    } else if (selectedGenre === 'Disco') {
+      // High-pass sparkle + Low punch
+      const highFilter = offlineCtx.createBiquadFilter();
+      highFilter.type = 'highshelf';
+      highFilter.frequency.value = 3500;
+      highFilter.gain.value = 8;
+      lastNode.connect(highFilter);
+      lastNode = highFilter;
+
+    } else if (selectedGenre === 'Reggae') {
+      // Dub Delay Feedback Loop
+      const dubDelay = offlineCtx.createDelay(1.0);
+      dubDelay.delayTime.value = 0.32;
+      const dubFeedback = offlineCtx.createGain();
+      dubFeedback.gain.value = 0.45;
+      const dubFilter = offlineCtx.createBiquadFilter();
+      dubFilter.type = 'lowpass';
+      dubFilter.frequency.value = 2200;
+
+      lastNode.connect(dubDelay);
+      dubDelay.connect(dubFilter);
+      dubFilter.connect(dubFeedback);
+      dubFeedback.connect(dubDelay); // Feedback loop
+      dubFilter.connect(offlineCtx.destination);
+
+    } else if (selectedGenre === 'Funk') {
+      // Resonant Wah Filter Peak
+      const wahFilter = offlineCtx.createBiquadFilter();
+      wahFilter.type = 'bandpass';
+      wahFilter.frequency.value = 1200;
+      wahFilter.Q.value = 4.0;
+      lastNode.connect(wahFilter);
+      lastNode = wahFilter;
+
+    } else if (selectedGenre === 'Jazz') {
+      // Warm Vintage Horn Lowpass
+      const jazzFilter = offlineCtx.createBiquadFilter();
+      jazzFilter.type = 'lowpass';
+      jazzFilter.frequency.value = 4000;
+      lastNode.connect(jazzFilter);
+      lastNode = jazzFilter;
+
     } else {
-      genreFilter.type = 'peaking';
-      genreFilter.frequency.value = 1000;
-      genreFilter.gain.value = 3;
+      // Pop / Ballad: High-shelf Shimmer
+      const shimmerFilter = offlineCtx.createBiquadFilter();
+      shimmerFilter.type = 'highshelf';
+      shimmerFilter.frequency.value = 5000;
+      shimmerFilter.gain.value = 7;
+      lastNode.connect(shimmerFilter);
+      lastNode = shimmerFilter;
     }
 
-    source.connect(bassFilter);
-    bassFilter.connect(genreFilter);
-    genreFilter.connect(offlineCtx.destination);
-    source.start();
+    lastNode.connect(offlineCtx.destination);
+    source.start(0);
 
     const renderedBuffer = await offlineCtx.startRendering();
-    
-    // Convert AudioBuffer to WAV Blob
-    const wavBlob = audioBufferToWavBlob(renderedBuffer);
-    return wavBlob;
+
+    // 3. Post-Process 8-Bit chiptune quantization if selected
+    if (selectedGenre === '8-bit') {
+      const step = 4; // Downsampling step
+      const bitDepth = 5; // 5-bit arcade audio
+      const qStep = 2.0 / Math.pow(2, bitDepth);
+      for (let ch = 0; ch < renderedBuffer.numberOfChannels; ch++) {
+        const data = renderedBuffer.getChannelData(ch);
+        for (let i = 0; i < data.length; i += step) {
+          const quant = Math.round(data[i] / qStep) * qStep;
+          for (let s = 0; s < step && i + s < data.length; s++) {
+            data[i + s] = quant;
+          }
+        }
+      }
+    }
+
+    return audioBufferToWavBlob(renderedBuffer);
   };
 
   // Helper to convert AudioBuffer to WAV format
@@ -194,51 +350,11 @@ function App() {
     if (!file || !selectedGenre) return;
     
     setIsTransforming(true);
-    setTransformStatus('');
+    setTransformStatus('Preparing audio...');
     setResultAudioUrl(null);
     setErrorMessage(null);
     setUsedFallback(false);
 
-    const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
-
-    // --- Step 1: Fast health-check (3s) ---
-    // Skipped if no backend URL is configured (pure client-side mode)
-    let backendAvailable = false;
-    if (apiBaseUrl) {
-      setTransformStatus('Checking backend...');
-      backendAvailable = await pingBackend(apiBaseUrl, 3000);
-    }
-
-    if (!backendAvailable) {
-      // Determine reason for better UX messaging
-      const isMixedContent = apiBaseUrl.startsWith('http://') && window.location.protocol === 'https:';
-      const reason = !apiBaseUrl
-        ? 'No backend URL configured'
-        : isMixedContent
-        ? 'Backend URL is HTTP on an HTTPS page (Mixed Content blocked)'
-        : 'Backend is offline or cold-starting (Render free tier)';
-
-      console.warn(`Backend unavailable — ${reason}. Activating Web Audio DSP Fallback.`);
-      setErrorMessage(`⚡ ${reason}. Using Client-Side Web Audio DSP Engine instead.`);
-
-      try {
-        setTransformStatus('Running client-side DSP...');
-        const fallbackBlob = await processAudioWithWebAudio(file);
-        const url = window.URL.createObjectURL(fallbackBlob);
-        setResultAudioUrl(url);
-        setResultFilename(`${selectedGenre.toLowerCase()}_style_${file.name.replace(/\.[^/.]+$/, '')}.wav`);
-        setUsedFallback(true);
-      } catch (fallbackErr) {
-        console.error('Fallback failed:', fallbackErr);
-        setErrorMessage(`Transformation failed: ${fallbackErr.message}`);
-      } finally {
-        setIsTransforming(false);
-        setTransformStatus('');
-      }
-      return;
-    }
-
-    // --- Step 2: Backend is alive — send full transform request ---
     const formData = new FormData();
     formData.append('file', file);
     formData.append('genre', selectedGenre);
@@ -247,35 +363,56 @@ function App() {
     formData.append('surround_3d', surround3D);
     formData.append('bass_boost', bassBoost);
 
-    try {
-      setTransformStatus('Transforming on server...');
-      const response = await fetch(`${apiBaseUrl}/transform/`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Server status ${response.status}: ${errorText || response.statusText}`);
-      }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      setResultAudioUrl(url);
-
-      const contentDisposition = response.headers.get('Content-Disposition');
-      let filename = `transformed_${selectedGenre.toLowerCase()}_${file.name}`;
-      if (contentDisposition && contentDisposition.includes('filename=')) {
-        filename = contentDisposition.split('filename=')[1].replace(/["']/g, '');
-      }
-      setResultFilename(filename);
-
-    } catch (error) {
-      console.warn('Backend transform failed, activating Web Audio DSP Fallback:', error);
-      setErrorMessage(`Backend error: ${error.message}. Switched to Client-Side Web Audio DSP Engine!`);
-      
+    // 1. Attempt Server-Side Transformation (with cold-start status)
+    let serverSucceeded = false;
+    if (apiBaseUrl) {
       try {
-        setTransformStatus('Running client-side DSP fallback...');
+        setTransformStatus('Connecting to server...');
+        
+        // Timeout after 45s to allow Render free-tier cold start if sleeping
+        const controller = new AbortController();
+        const timeoutTimer = setTimeout(() => {
+          setTransformStatus('Server waking up (Render free tier), please wait...');
+        }, 4000);
+        const hardTimeout = setTimeout(() => controller.abort(), 50000);
+
+        const response = await fetch(`${apiBaseUrl}/transform/`, {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutTimer);
+        clearTimeout(hardTimeout);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        setResultAudioUrl(url);
+
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let filename = `transformed_${selectedGenre.toLowerCase()}_${file.name}`;
+        if (contentDisposition && contentDisposition.includes('filename=')) {
+          filename = contentDisposition.split('filename=')[1].replace(/["']/g, '');
+        }
+        setResultFilename(filename);
+        setServerStatus('online');
+        serverSucceeded = true;
+
+      } catch (error) {
+        console.warn('Backend transform failed, activating Web Audio DSP Fallback:', error);
+        setErrorMessage(`Server connection issue (${error.message}). Switched to High-Impact Web Audio DSP!`);
+      }
+    }
+
+    // 2. Fallback to High-Impact Web Audio Engine if server didn't respond
+    if (!serverSucceeded) {
+      try {
+        setTransformStatus('Processing via Web Audio DSP...');
         const fallbackBlob = await processAudioWithWebAudio(file);
         const url = window.URL.createObjectURL(fallbackBlob);
         setResultAudioUrl(url);
@@ -283,12 +420,12 @@ function App() {
         setUsedFallback(true);
       } catch (fallbackErr) {
         console.error('Fallback failed:', fallbackErr);
-        setErrorMessage(`Transformation failed: ${error.message}`);
+        setErrorMessage(`Transformation error: ${fallbackErr.message}`);
       }
-    } finally {
-      setIsTransforming(false);
-      setTransformStatus('');
     }
+
+    setIsTransforming(false);
+    setTransformStatus('');
   };
 
   return (
@@ -335,6 +472,14 @@ function App() {
             </h1>
           </div>
           <p className="app-subtitle">Transform your song in different style</p>
+          
+          {/* Live Server Health Pill */}
+          <div className="server-status-pill">
+            {serverStatus === 'online' && <span className="status-dot dot-online">● Backend Online</span>}
+            {serverStatus === 'waking' && <span className="status-dot dot-waking">◐ Backend Waking Up...</span>}
+            {serverStatus === 'offline' && <span className="status-dot dot-offline">○ Web Audio DSP Mode</span>}
+            {serverStatus === 'checking' && <span className="status-dot dot-checking">◌ Connecting...</span>}
+          </div>
         </header>
 
         {/* Error Toast Notification if Backend Cold-starts / Network error */}

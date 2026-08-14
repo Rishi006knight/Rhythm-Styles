@@ -77,6 +77,50 @@
   letter-spacing: 0.04em;
 }
 
+.server-status-pill {
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot-online {
+  color: #4ade80;
+  text-shadow: 0 0 10px rgba(74, 222, 128, 0.6);
+}
+
+.dot-waking {
+  color: #facc15;
+  text-shadow: 0 0 10px rgba(250, 204, 21, 0.6);
+  animation: pulseWake 1.5s infinite;
+}
+
+.dot-offline {
+  color: var(--cyan-light);
+  text-shadow: 0 0 10px rgba(6, 182, 212, 0.6);
+}
+
+.dot-checking {
+  color: #94a3b8;
+}
+
+@keyframes pulseWake {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
 /* Sections Layout */
 .app-main {
   display: flex;
