@@ -12,18 +12,29 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    print("WARNING: DATABASE_URL environment variable is not set. Please set it in backend/.env")
-    DATABASE_URL = "sqlite:///:memory:"  # Safe fallback for offline development / testing
+    print("INFO: DATABASE_URL not provided. Using local SQLite database (rhythm.db).")
+    DATABASE_URL = "sqlite:///./rhythm.db"
 
-# Fix for psycopg2 requiring postgresql:// instead of postgres://
+# Fix for PostgreSQL scheme in Render / Heroku / Neon
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,
-    pool_recycle=300
-)
+# Configure thread safety for SQLite
+connect_args = {}
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False}
+
+try:
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args=connect_args,
+        pool_pre_ping=True if not DATABASE_URL.startswith("sqlite") else False,
+        pool_recycle=300 if not DATABASE_URL.startswith("sqlite") else -1
+    )
+except Exception as e:
+    print(f"Database engine init error: {e}. Falling back to safe SQLite file.")
+    engine = create_engine("sqlite:///./rhythm.db", connect_args={"check_same_thread": False})
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
