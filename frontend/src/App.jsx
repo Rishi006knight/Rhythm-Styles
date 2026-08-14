@@ -17,7 +17,7 @@ function App() {
   const [errorMessage, setErrorMessage] = useState(null);
   const [usedFallback, setUsedFallback] = useState(false);
   const [serverStatus, setServerStatus] = useState('checking'); // 'online' | 'waking' | 'offline'
-  
+
   // Global Enhancements
   const [surround3D, setSurround3D] = useState(false);
   const [bassBoost, setBassBoost] = useState(25);
@@ -176,7 +176,7 @@ function App() {
       const distortion = offlineCtx.createWaveShaper();
       distortion.curve = makeDistortionCurve(selectedGenre === 'Metal' ? 120 : 50);
       distortion.oversample = '4x';
-      
+
       const cabFilter = offlineCtx.createBiquadFilter();
       cabFilter.type = 'lowpass';
       cabFilter.frequency.value = selectedGenre === 'Metal' ? 4500 : 5500;
@@ -263,12 +263,40 @@ function App() {
       lastNode = shimmerFilter;
     }
 
-    lastNode.connect(offlineCtx.destination);
-    source.start(0);
-
     const renderedBuffer = await offlineCtx.startRendering();
 
-    // 3. Post-Process 8-Bit chiptune quantization if selected
+    // 3. Post-Process: 3D Surround (8D Audio Circular Panning & Haas Widening)
+    if (surround3D && renderedBuffer.numberOfChannels >= 2) {
+      const leftChan = renderedBuffer.getChannelData(0);
+      const rightChan = renderedBuffer.getChannelData(1);
+      const sr = renderedBuffer.sampleRate;
+      const len = leftChan.length;
+
+      // 0.12 Hz circular panning LFO (8.3 seconds per 360° rotation)
+      const panFreq = 0.12;
+      const haasSamples = Math.floor(0.016 * sr); // 16ms Haas stereo delay
+
+      for (let i = 0; i < len; i++) {
+        const t = i / sr;
+        const angle = (Math.sin(2 * Math.PI * panFreq * t) + 1) * (Math.PI / 4);
+        const gainL = Math.cos(angle);
+        const gainR = Math.sin(angle);
+
+        const l = leftChan[i];
+        const r = rightChan[i];
+
+        leftChan[i] = l * gainL;
+        rightChan[i] = r * gainR;
+
+        // Haas stereo widening
+        if (i >= haasSamples) {
+          leftChan[i] += rightChan[i - haasSamples] * 0.35;
+          rightChan[i] += leftChan[i - haasSamples] * 0.35;
+        }
+      }
+    }
+
+    // 4. Post-Process: 8-Bit chiptune quantization if selected
     if (selectedGenre === '8-bit') {
       const step = 4; // Downsampling step
       const bitDepth = 5; // 5-bit arcade audio
@@ -348,7 +376,7 @@ function App() {
 
   const handleTransform = async () => {
     if (!file || !selectedGenre) return;
-    
+
     setIsTransforming(true);
     setTransformStatus('Preparing audio...');
     setResultAudioUrl(null);
@@ -368,7 +396,7 @@ function App() {
     if (apiBaseUrl) {
       try {
         setTransformStatus('Connecting to server...');
-        
+
         // Timeout after 45s to allow Render free-tier cold start if sleeping
         const controller = new AbortController();
         const timeoutTimer = setTimeout(() => {
@@ -455,7 +483,7 @@ function App() {
 
       {/* Main Content Container */}
       <div className="app-container">
-        
+
         {/* Header */}
         <header className="app-header animate-section" style={{ animationDelay: '0.1s' }}>
           <div className="logo-brand-container">
@@ -472,7 +500,7 @@ function App() {
             </h1>
           </div>
           <p className="app-subtitle">Transform your song in different style</p>
-          
+
           {/* Live Server Health Pill */}
           <div className="server-status-pill">
             {serverStatus === 'online' && <span className="status-dot dot-online">● Backend Online</span>}
@@ -499,22 +527,22 @@ function App() {
             <h2 className="section-title">
               <span className="step-num">1</span> Upload Song
             </h2>
-            
-            <div 
+
+            <div
               className={`dropzone-container ${isDragOver ? 'drag-over' : ''}`}
               onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
               onDragLeave={() => setIsDragOver(false)}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
             >
-              <input 
+              <input
                 ref={fileInputRef}
-                type="file" 
-                accept="audio/*" 
+                type="file"
+                accept="audio/*"
                 onChange={handleFileChange}
                 style={{ display: 'none' }}
               />
-              
+
               {!file ? (
                 <>
                   <div className="upload-icon-wrapper">
@@ -545,7 +573,7 @@ function App() {
             <h2 className="section-title">
               <span className="step-num">2</span> Select Genre
             </h2>
-            
+
             <div className="genre-grid">
               {genres.map((genre) => {
                 const isSelected = selectedGenre === genre;
@@ -570,7 +598,7 @@ function App() {
             <h2 className="section-title">
               <span className="step-num">3</span> Style Intensity
             </h2>
-            
+
             <div className="intensity-pills-row">
               {['Low', 'Medium', 'High'].map((level) => (
                 <button
@@ -690,7 +718,7 @@ function App() {
               {usedFallback && (
                 <span className="mode-badge">⚡ Processed via Client-Side Web Audio DSP</span>
               )}
-              
+
               <audio controls src={resultAudioUrl} className="custom-audio-player" autoPlay />
 
               <a
