@@ -123,15 +123,16 @@ function App() {
     setEffects(prev => ({ ...prev, [effect]: level }));
   };
 
-  // Distortion curve generator for WaveShaperNode
-  const makeDistortionCurve = (amount = 20) => {
-    const k = typeof amount === 'number' ? amount : 50;
+  // Smooth Analog Tube Saturation curve (eliminates digital harshness / white noise buzz)
+  const makeDistortionCurve = (amount = 25) => {
+    const k = typeof amount === 'number' ? amount : 25;
     const n_samples = 44100;
     const curve = new Float32Array(n_samples);
-    const deg = Math.PI / 180;
+    const drive = Math.max(k / 15, 1.0);
     for (let i = 0; i < n_samples; ++i) {
       const x = (i * 2) / n_samples - 1;
-      curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+      // Smooth hyperbolic tangent analog saturation with mild warm asymmetry
+      curve[i] = Math.tanh(x * drive) + 0.05 * Math.tanh(x * drive * 2);
     }
     return curve;
   };
@@ -173,16 +174,24 @@ function App() {
     lastNode = bassFilter;
 
     if (selectedGenre === 'Rock' || selectedGenre === 'Metal') {
-      // WaveShaper Overdrive / Distortion
+      // Pre-filter: Cut extreme highs before distortion to prevent white noise aliasing
+      const preFilter = offlineCtx.createBiquadFilter();
+      preFilter.type = 'lowpass';
+      preFilter.frequency.value = 5200;
+
+      // Analog Tube Overdrive
       const distortion = offlineCtx.createWaveShaper();
-      distortion.curve = makeDistortionCurve(selectedGenre === 'Metal' ? 120 : 50);
+      distortion.curve = makeDistortionCurve(selectedGenre === 'Metal' ? 45 : 22);
       distortion.oversample = '4x';
 
+      // 4.6kHz Speaker Cabinet Anti-Fizz Filter (eliminates 'rrrrr' white noise fuzz)
       const cabFilter = offlineCtx.createBiquadFilter();
       cabFilter.type = 'lowpass';
-      cabFilter.frequency.value = selectedGenre === 'Metal' ? 4500 : 5500;
+      cabFilter.frequency.value = selectedGenre === 'Metal' ? 4400 : 4800;
+      cabFilter.Q.value = 0.8;
 
-      lastNode.connect(distortion);
+      lastNode.connect(preFilter);
+      preFilter.connect(distortion);
       distortion.connect(cabFilter);
       lastNode = cabFilter;
 
@@ -191,7 +200,7 @@ function App() {
       const bitFilter = offlineCtx.createBiquadFilter();
       bitFilter.type = 'peaking';
       bitFilter.frequency.value = 1500;
-      bitFilter.gain.value = 12;
+      bitFilter.gain.value = 10;
       lastNode.connect(bitFilter);
       lastNode = bitFilter;
 
@@ -316,6 +325,18 @@ function App() {
           for (let s = 0; s < step && i + s < data.length; s++) {
             data[i + s] = quant;
           }
+        }
+      }
+    }
+
+    // 5. Post-Process: Noise Gate / De-Hiss pass to kill quiet white noise / buzz
+    const noiseThreshold = 0.012; // -38dB
+    for (let ch = 0; ch < renderedBuffer.numberOfChannels; ch++) {
+      const data = renderedBuffer.getChannelData(ch);
+      for (let i = 0; i < data.length; i++) {
+        const absVal = Math.abs(data[i]);
+        if (absVal < noiseThreshold) {
+          data[i] = data[i] * (absVal / noiseThreshold); // Smooth downward expansion
         }
       }
     }
