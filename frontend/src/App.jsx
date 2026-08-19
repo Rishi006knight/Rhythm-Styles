@@ -10,13 +10,10 @@ function App() {
   const [file, setFile] = useState(null);
   const [filePreviewUrl, setFilePreviewUrl] = useState(null);
   const [isTransforming, setIsTransforming] = useState(false);
-  const [transformStatus, setTransformStatus] = useState(''); // status sub-label
   const [resultAudioUrl, setResultAudioUrl] = useState(null);
   const [resultFilename, setResultFilename] = useState('');
   const [isDragOver, setIsDragOver] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
-  const [usedFallback, setUsedFallback] = useState(false);
-  const [serverStatus, setServerStatus] = useState('checking'); // 'online' | 'waking' | 'offline'
 
   // Global Enhancements
   const [surround3D, setSurround3D] = useState(false);
@@ -27,43 +24,9 @@ function App() {
 
   const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || DEFAULT_BACKEND_URL).replace(/\/$/, '');
 
-  // Auto-wake Render backend immediately on page load
+  // Pre-wake backend in background on page load
   useEffect(() => {
-    let isMounted = true;
-    const checkServer = async () => {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 6000);
-        const res = await fetch(`${apiBaseUrl}/health`, { signal: controller.signal });
-        clearTimeout(timer);
-        if (res.ok && isMounted) {
-          setServerStatus('online');
-          return;
-        }
-      } catch (err) {
-        // May be sleeping
-      }
-
-      if (isMounted) setServerStatus('waking');
-
-      // Retry after 15 seconds if it was sleeping
-      try {
-        const controller2 = new AbortController();
-        const timer2 = setTimeout(() => controller2.abort(), 35000);
-        const res2 = await fetch(`${apiBaseUrl}/health`, { signal: controller2.signal });
-        clearTimeout(timer2);
-        if (res2.ok && isMounted) {
-          setServerStatus('online');
-        } else if (isMounted) {
-          setServerStatus('offline');
-        }
-      } catch {
-        if (isMounted) setServerStatus('offline');
-      }
-    };
-
-    checkServer();
-    return () => { isMounted = false; };
+    fetch(`${apiBaseUrl}/health`).catch(() => {});
   }, [apiBaseUrl]);
 
   const genreDetails = {
@@ -389,28 +352,12 @@ function App() {
     return new Blob([outBuffer], { type: 'audio/wav' });
   };
 
-  // Fast health-check with configurable timeout (ms)
-  const pingBackend = async (apiBaseUrl, timeoutMs = 3000) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(`${apiBaseUrl}/health`, { signal: controller.signal });
-      clearTimeout(timer);
-      return res.ok;
-    } catch {
-      clearTimeout(timer);
-      return false;
-    }
-  };
-
   const handleTransform = async () => {
     if (!file || !selectedGenre) return;
 
     setIsTransforming(true);
-    setTransformStatus('Preparing audio...');
     setResultAudioUrl(null);
     setErrorMessage(null);
-    setUsedFallback(false);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -421,17 +368,11 @@ function App() {
     formData.append('bass_boost', bassBoost);
     formData.append('volume', volume);
 
-    // 1. Attempt Server-Side Transformation (with cold-start status)
+    // 1. Attempt Server-Side Transformation
     let serverSucceeded = false;
     if (apiBaseUrl) {
       try {
-        setTransformStatus('Connecting to server...');
-
-        // Timeout after 45s to allow Render free-tier cold start if sleeping
         const controller = new AbortController();
-        const timeoutTimer = setTimeout(() => {
-          setTransformStatus('Server waking up (Render free tier), please wait...');
-        }, 4000);
         const hardTimeout = setTimeout(() => controller.abort(), 50000);
 
         const response = await fetch(`${apiBaseUrl}/transform/`, {
@@ -440,7 +381,6 @@ function App() {
           signal: controller.signal,
         });
 
-        clearTimeout(timeoutTimer);
         clearTimeout(hardTimeout);
 
         if (!response.ok) {
@@ -458,24 +398,20 @@ function App() {
           filename = contentDisposition.split('filename=')[1].replace(/["']/g, '');
         }
         setResultFilename(filename);
-        setServerStatus('online');
         serverSucceeded = true;
 
       } catch (error) {
         console.warn('Backend transform failed, activating Web Audio DSP Fallback:', error);
-        setErrorMessage(`Server connection issue (${error.message}). Switched to High-Impact Web Audio DSP!`);
       }
     }
 
-    // 2. Fallback to High-Impact Web Audio Engine if server didn't respond
+    // 2. Fallback to Web Audio Engine if server didn't respond
     if (!serverSucceeded) {
       try {
-        setTransformStatus('Processing via Web Audio DSP...');
         const fallbackBlob = await processAudioWithWebAudio(file);
         const url = window.URL.createObjectURL(fallbackBlob);
         setResultAudioUrl(url);
         setResultFilename(`${selectedGenre.toLowerCase()}_style_${file.name.replace(/\.[^/.]+$/, '')}.wav`);
-        setUsedFallback(true);
       } catch (fallbackErr) {
         console.error('Fallback failed:', fallbackErr);
         setErrorMessage(`Transformation error: ${fallbackErr.message}`);
@@ -483,7 +419,6 @@ function App() {
     }
 
     setIsTransforming(false);
-    setTransformStatus('');
   };
 
   return (
@@ -530,14 +465,6 @@ function App() {
             </h1>
           </div>
           <p className="app-subtitle">Transform your song in different style</p>
-
-          {/* Live Server Health Pill */}
-          <div className="server-status-pill">
-            {serverStatus === 'online' && <span className="status-dot dot-online">● Backend Online</span>}
-            {serverStatus === 'waking' && <span className="status-dot dot-waking">◐ Backend Waking Up...</span>}
-            {serverStatus === 'offline' && <span className="status-dot dot-offline">○ Web Audio DSP Mode</span>}
-            {serverStatus === 'checking' && <span className="status-dot dot-checking">◌ Connecting...</span>}
-          </div>
         </header>
 
         {/* Error Toast Notification if Backend Cold-starts / Network error */}
@@ -747,7 +674,7 @@ function App() {
                       />
                     ))}
                   </div>
-                  <span>{transformStatus || 'TRANSFORMING AUDIO...'}</span>
+                  <span>Processing...</span>
                 </>
               ) : (
                 <>
@@ -763,9 +690,6 @@ function App() {
               <h2 className="section-title" style={{ marginBottom: 0 }}>
                 🎉 Transformation Result
               </h2>
-              {usedFallback && (
-                <span className="mode-badge">⚡ Processed via Client-Side Web Audio DSP</span>
-              )}
 
               <audio controls src={resultAudioUrl} className="custom-audio-player" autoPlay />
 
